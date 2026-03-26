@@ -221,6 +221,7 @@ describe("scripts/test-parallel lane planning", () => {
     const outputPath = path.join(os.tmpdir(), `openclaw-ci-manifest-${Date.now()}.json`);
     const outputFd = fs.openSync(outputPath, "w");
     try {
+      // Vitest can truncate large child stdout captures, so read the manifest back from disk.
       execFileSync("node", ["scripts/test-parallel.mjs", "--ci-manifest"], {
         cwd: repoRoot,
         env: {
