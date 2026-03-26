@@ -265,6 +265,46 @@ describe("executeSendAction", () => {
     });
   });
 
+  it("mirrors explicit upload-file plugin sends through the send pipeline", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("file-plugin"));
+
+    const result = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "slack",
+        params: {
+          to: "channel:C123",
+          message: "fresh build",
+          filePath: "/tmp/report.png",
+        },
+        dryRun: false,
+        mirror: {
+          sessionKey: "agent:main:slack:channel:c123",
+          agentId: "agent-7",
+        },
+      },
+      pluginAction: "upload-file",
+      allowCoreFallback: false,
+      to: "channel:C123",
+      message: "fresh build",
+      mediaUrl: "/tmp/report.png",
+    });
+
+    expect(result.handledBy).toBe("plugin");
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "upload-file",
+      }),
+    );
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expectMirrorWrite({
+      agentId: "agent-7",
+      sessionKey: "agent:main:slack:channel:c123",
+      text: "fresh build",
+      mediaUrls: ["/tmp/report.png"],
+    });
+  });
+
   it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",

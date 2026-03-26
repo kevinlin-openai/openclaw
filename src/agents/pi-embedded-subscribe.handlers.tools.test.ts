@@ -409,6 +409,53 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.get("tool-m1")).toEqual(["file:///img.jpg"]);
   });
 
+  it("tracks upload-file tool sends as messaging sends", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-upload-1",
+      args: {
+        action: "upload-file",
+        channel: "slack",
+        target: "channel:C123",
+        message: "fresh build",
+        filePath: "file:///report.png",
+      },
+    };
+
+    await handleToolExecutionStart(ctx, startEvt);
+
+    expect(ctx.state.pendingMessagingTargets.get("tool-upload-1")).toEqual({
+      tool: "message",
+      provider: "slack",
+      to: "channel:C123",
+      accountId: undefined,
+    });
+    expect(ctx.state.pendingMessagingMediaUrls.get("tool-upload-1")).toEqual([
+      "file:///report.png",
+    ]);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-upload-1",
+      isError: false,
+      result: { ok: true },
+    };
+
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentTargets).toContainEqual(
+      expect.objectContaining({
+        provider: "slack",
+        to: "channel:C123",
+      }),
+    );
+    expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///report.png");
+  });
+
   it("commits pending media URL on tool success", async () => {
     const { ctx } = createTestContext();
 

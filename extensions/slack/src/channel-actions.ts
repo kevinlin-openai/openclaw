@@ -42,6 +42,11 @@ export function createSlackActions(
         ? {
             properties: {
               blocks: Type.Optional(createSlackMessageToolBlocksSchema()),
+              title: Type.Optional(
+                Type.String({
+                  description: "Slack upload-file title override shown in the file preview.",
+                }),
+              ),
             },
           }
         : null,

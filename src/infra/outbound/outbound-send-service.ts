@@ -1,6 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelMessageActionName,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
@@ -56,7 +60,7 @@ function collectActionMediaSources(params: Record<string, unknown>): string[] {
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
-  action: "send" | "poll";
+  action: ChannelMessageActionName;
   onHandled?: () => Promise<void> | void;
 }): Promise<PluginHandledResult | null> {
   if (params.ctx.dryRun) {
@@ -95,6 +99,8 @@ export async function executeSendAction(params: {
   message: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  pluginAction?: ChannelMessageActionName;
+  allowCoreFallback?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   bestEffort?: boolean;
@@ -107,9 +113,10 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  const pluginAction = params.pluginAction ?? "send";
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
-    action: "send",
+    action: pluginAction,
     onHandled: async () => {
       if (!params.ctx.mirror) {
         return;
@@ -130,6 +137,11 @@ export async function executeSendAction(params: {
   });
   if (pluginHandled) {
     return pluginHandled;
+  }
+  if (params.allowCoreFallback === false) {
+    throw new Error(
+      `Message action ${pluginAction} not supported for channel ${params.ctx.channel}.`,
+    );
   }
 
   throwIfAborted(params.ctx.abortSignal);

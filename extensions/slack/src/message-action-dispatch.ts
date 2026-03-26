@@ -217,6 +217,7 @@ export async function handleSlackMessageAction(params: {
         filePath,
         initialComment:
           readStringParam(actionParams, "initialComment", { allowEmpty: true }) ??
+          readStringParam(actionParams, "caption", { allowEmpty: true }) ??
           readStringParam(actionParams, "message", { allowEmpty: true }) ??
           "",
         filename: readStringParam(actionParams, "filename"),

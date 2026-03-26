@@ -370,6 +370,7 @@ describe("message tool schema scoping", () => {
     toolSchema: () => ({
       properties: {
         blocks: createSlackMessageToolBlocksSchema(),
+        title: Type.Optional(Type.String()),
       },
     }),
   });
@@ -401,6 +402,7 @@ describe("message tool schema scoping", () => {
       provider: "slack",
       expectComponents: false,
       expectBlocks: true,
+      expectTitle: true,
       expectButtons: false,
       expectButtonStyle: false,
       expectTelegramPollExtras: true,
@@ -412,6 +414,7 @@ describe("message tool schema scoping", () => {
       provider,
       expectComponents,
       expectBlocks,
+      expectTitle,
       expectButtons,
       expectButtonStyle,
       expectTelegramPollExtras,
@@ -441,6 +444,11 @@ describe("message tool schema scoping", () => {
         expect(properties.blocks).toBeDefined();
       } else {
         expect(properties.blocks).toBeUndefined();
+      }
+      if (expectTitle) {
+        expect(properties.title).toBeDefined();
+      } else {
+        expect(properties.title).toBeUndefined();
       }
       if (expectButtons) {
         expect(properties.buttons).toBeDefined();
@@ -888,6 +896,13 @@ describe("message tool reasoning tag sanitization", () => {
       expected: "Normal message without any tags",
       target: "signal:+15551234567",
       channel: "signal",
+    },
+    {
+      field: "title",
+      input: "<think>draft title</think>Build Screenshot",
+      expected: "Build Screenshot",
+      target: "slack:channel:C123",
+      channel: "slack",
     },
   ])(
     "sanitizes reasoning tags in $field before sending",

@@ -120,6 +120,35 @@ describe("handleSlackMessageAction", () => {
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
   });
 
+  it("maps upload-file caption to initialComment", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "upload-file",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          filePath: "/tmp/report.txt",
+          caption: "caption alias",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "channel:C1",
+        filePath: "/tmp/report.txt",
+        initialComment: "caption alias",
+      }),
+      expect.any(Object),
+      undefined,
+    );
+  });
+
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
 

@@ -56,4 +56,16 @@ describe("extractMessagingToolSend", () => {
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
   });
+
+  it("treats upload-file as a messaging send", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "upload-file",
+      channel: "telegram",
+      target: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
 });

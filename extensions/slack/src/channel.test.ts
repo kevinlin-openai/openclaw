@@ -93,6 +93,7 @@ describe("slackPlugin actions", () => {
     expect(discovery?.schema).toMatchObject({
       properties: {
         blocks: expect.any(Object),
+        title: expect.any(Object),
       },
     });
   });
@@ -114,6 +115,7 @@ describe("slackPlugin actions", () => {
     }
 
     expect(Type.Object(schema.properties).required).toBeUndefined();
+    expect(schema.properties.title).toBeDefined();
   });
 
   it("forwards read threadId to Slack action handler", async () => {

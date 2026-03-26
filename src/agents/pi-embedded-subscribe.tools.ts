@@ -3,7 +3,7 @@ import { normalizeTargetForProvider } from "../infra/outbound/target-normalizati
 import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import { isCoreMessageToolSendAction, type MessagingToolSend } from "./pi-embedded-messaging.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -375,7 +375,7 @@ export function extractMessagingToolSend(
   const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   const accountId = accountIdRaw ? accountIdRaw : undefined;
   if (toolName === "message") {
-    if (action !== "send" && action !== "thread-reply") {
+    if (!isCoreMessageToolSendAction(action)) {
       return undefined;
     }
     const toRaw = resolveMessageToolTarget(args);

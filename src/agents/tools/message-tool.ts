@@ -687,7 +687,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       // Strip reasoning tags from text fields — models may include <think>…</think>
       // in tool arguments, and the messaging tool send path has no other tag filtering.
-      for (const field of ["text", "content", "message", "caption"]) {
+      for (const field of ["text", "content", "message", "caption", "initialComment", "title"]) {
         if (typeof params[field] === "string") {
           params[field] = stripReasoningTagsFromText(params[field]);
         }

@@ -1,10 +1,14 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
@@ -281,6 +285,165 @@ describe("runMessageAction plugin dispatch", () => {
         expect.objectContaining({
           text: "hello",
           mediaUrl: "https://example.com/file.txt",
+        }),
+      );
+    });
+
+    it("adds cross-context markers to plugin upload comments before dispatch", async () => {
+      const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+        jsonResult({
+          ok: true,
+          params,
+        }),
+      );
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "slack",
+                config: createAlwaysConfiguredPluginConfig(),
+              }),
+              outbound: { deliveryMode: "direct" },
+              messaging: {
+                normalizeTarget: (raw: string) => raw.trim() || undefined,
+                targetResolver: {
+                  looksLikeId: (raw: string) => raw.trim().length > 0,
+                  hint: "<id>",
+                  resolveTarget: async ({ input }: { input: string }) => ({
+                    to: input.trim(),
+                    kind: "group",
+                    source: "normalized",
+                  }),
+                },
+              },
+              actions: {
+                describeMessageTool: () => ({ actions: ["upload-file"] }),
+                supportsAction: ({ action }: { action: ChannelMessageActionName }) =>
+                  action === "upload-file",
+                handleAction,
+              },
+            },
+          },
+        ]),
+      );
+      const cfg = {
+        channels: {
+          slack: {
+            enabled: true,
+          },
+        },
+        tools: {
+          message: {
+            crossContext: {
+              marker: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "slack",
+          target: "C999",
+          filePath: "/tmp/report.png",
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "C123",
+        } as never,
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("action");
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "upload-file",
+          params: expect.objectContaining({
+            to: "C999",
+            message: "[from C123] ",
+            filePath: "/tmp/report.png",
+          }),
+        }),
+      );
+    });
+
+    it("routes upload-file through send-like plugin bookkeeping before dispatch", async () => {
+      const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+        jsonResult({
+          ok: true,
+          params,
+        }),
+      );
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "slack",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "slack",
+                config: createAlwaysConfiguredPluginConfig(),
+              }),
+              outbound: { deliveryMode: "direct" },
+              messaging: {
+                normalizeTarget: (raw: string) => raw.trim() || undefined,
+                targetResolver: {
+                  looksLikeId: (raw: string) => raw.trim().length > 0,
+                  hint: "<id>",
+                  resolveTarget: async ({ input }: { input: string }) => ({
+                    to: input.trim(),
+                    kind: "group",
+                    source: "normalized",
+                  }),
+                },
+              },
+              actions: {
+                describeMessageTool: () => ({ actions: ["upload-file"] }),
+                supportsAction: ({ action }: { action: ChannelMessageActionName }) =>
+                  action === "upload-file",
+                handleAction,
+              },
+            },
+          },
+        ]),
+      );
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            slack: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "upload-file",
+        params: {
+          channel: "slack",
+          target: "C999",
+          filePath: "/tmp/report.png",
+          message: "fresh build",
+        },
+        agentId: "main",
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("action");
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "upload-file",
+          params: expect.objectContaining({
+            to: "C999",
+            message: "fresh build",
+            initialComment: "fresh build",
+            __agentId: "main",
+          }),
         }),
       );
     });

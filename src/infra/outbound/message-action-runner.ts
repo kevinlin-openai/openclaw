@@ -175,6 +175,34 @@ function applyCrossContextMessageDecoration({
   return applied.message;
 }
 
+function resolvePluginActionMarkerText(args: Record<string, unknown>): {
+  key: "initialComment" | "caption" | "message";
+  value: string;
+} {
+  if (typeof args.initialComment === "string") {
+    return {
+      key: "initialComment",
+      value: args.initialComment,
+    };
+  }
+  if (typeof args.caption === "string") {
+    return {
+      key: "caption",
+      value: args.caption,
+    };
+  }
+  if (typeof args.message === "string") {
+    return {
+      key: "message",
+      value: args.message,
+    };
+  }
+  return {
+    key: "message",
+    value: "",
+  };
+}
+
 async function maybeApplyCrossContextMarker(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -205,6 +233,42 @@ async function maybeApplyCrossContextMarker(params: {
     decoration,
     preferComponents: params.preferComponents,
   });
+}
+
+async function maybeApplyPluginActionCrossContextMarker(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  toolContext?: ChannelThreadingToolContext;
+  accountId?: string | null;
+  args: Record<string, unknown>;
+}): Promise<void> {
+  if (!shouldApplyCrossContextMarker(params.action) || !params.toolContext) {
+    return;
+  }
+  const target =
+    (typeof params.args.to === "string" && params.args.to.trim()) ||
+    (typeof params.args.channelId === "string" && params.args.channelId.trim());
+  if (!target) {
+    return;
+  }
+  const decoration = await buildCrossContextDecoration({
+    cfg: params.cfg,
+    channel: params.channel,
+    target,
+    toolContext: params.toolContext,
+    accountId: params.accountId ?? undefined,
+  });
+  if (!decoration) {
+    return;
+  }
+  const { key, value } = resolvePluginActionMarkerText(params.args);
+  const applied = applyCrossContextDecoration({
+    message: value,
+    decoration,
+    preferComponents: false,
+  });
+  params.args[key] = applied.message;
 }
 
 async function resolveChannel(
@@ -392,7 +456,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     abortSignal,
   } = ctx;
   throwIfAborted(abortSignal);
-  const action: ChannelMessageActionName = "send";
+  const action: ChannelMessageActionName = input.action === "upload-file" ? "upload-file" : "send";
+  const uploadComment = readStringParam(params, "initialComment", { allowEmpty: true });
+  const uploadCaptionProvided = typeof params.caption === "string";
   const to = readStringParam(params, "to", { required: true });
   // Support media, path, and filePath parameters for attachments
   const mediaHint =
@@ -418,7 +484,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   if (message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
-  if (!message.trim() && caption.trim()) {
+  if (action === "upload-file") {
+    if (uploadComment !== undefined) {
+      message = uploadComment;
+    } else if (uploadCaptionProvided) {
+      message = caption;
+    }
+  } else if (!message.trim() && caption.trim()) {
     message = caption;
   }
 
@@ -472,6 +544,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
 
   const mediaUrl = readStringParam(params, "media", { trim: false });
+  if (action === "upload-file" && !mediaUrl && mergedMediaUrls.length === 0) {
+    throw new Error("upload-file requires media");
+  }
   if (
     !hasReplyPayloadContent(
       {
@@ -488,6 +563,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     throw new Error("send requires text or media");
   }
   params.message = message;
+  if (action === "upload-file") {
+    params.initialComment = message;
+  }
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
@@ -511,6 +589,16 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  if (action === "upload-file" && dryRun) {
+    return {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel, action },
+      dryRun: true,
+    };
+  }
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
@@ -535,6 +623,8 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       abortSignal,
       silent: silent ?? undefined,
     },
+    pluginAction: action,
+    allowCoreFallback: action === "send",
     to,
     message,
     mediaUrl: mediaUrl || undefined,
@@ -545,6 +635,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     replyToId: replyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
+  if (action === "upload-file") {
+    if (send.handledBy !== "plugin") {
+      throw new Error(`Message action ${action} not supported for channel ${channel}.`);
+    }
+    return {
+      kind: "action",
+      channel,
+      action,
+      handledBy: "plugin",
+      payload: send.payload,
+      toolResult: send.toolResult,
+      dryRun,
+    };
+  }
 
   return {
     kind: "send",
@@ -661,6 +765,15 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
       dryRun: true,
     };
   }
+
+  await maybeApplyPluginActionCrossContextMarker({
+    cfg,
+    channel,
+    action,
+    toolContext: input.toolContext,
+    accountId,
+    args: params,
+  });
 
   const plugin = resolveOutboundChannelPlugin({ channel, cfg });
   if (!plugin?.actions?.handleAction) {
@@ -787,6 +900,22 @@ export async function runMessageAction(
   const gateway = resolveGateway(input);
 
   if (action === "send") {
+    return handleSendAction({
+      cfg,
+      params,
+      channel,
+      mediaLocalRoots,
+      accountId,
+      dryRun,
+      gateway,
+      input,
+      agentId: resolvedAgentId,
+      resolvedTarget,
+      abortSignal: input.abortSignal,
+    });
+  }
+
+  if (action === "upload-file") {
     return handleSendAction({
       cfg,
       params,
