@@ -218,24 +218,32 @@ describe("scripts/test-parallel lane planning", () => {
 
   it("prints the planner-backed CI manifest as JSON", () => {
     const repoRoot = path.resolve(import.meta.dirname, "../..");
-    const output = execFileSync("node", ["scripts/test-parallel.mjs", "--ci-manifest"], {
-      cwd: repoRoot,
-      env: {
-        ...clearPlannerShardEnv(process.env),
-        GITHUB_EVENT_NAME: "pull_request",
-        OPENCLAW_CI_DOCS_ONLY: "false",
-        OPENCLAW_CI_DOCS_CHANGED: "false",
-        OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_MACOS: "true",
-        OPENCLAW_CI_RUN_ANDROID: "false",
-        OPENCLAW_CI_RUN_WINDOWS: "true",
-        OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
-        OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
-        OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
-      },
-      encoding: "utf8",
-    });
+    const outputPath = path.join(os.tmpdir(), `openclaw-ci-manifest-${Date.now()}.json`);
+    const outputFd = fs.openSync(outputPath, "w");
+    try {
+      execFileSync("node", ["scripts/test-parallel.mjs", "--ci-manifest"], {
+        cwd: repoRoot,
+        env: {
+          ...clearPlannerShardEnv(process.env),
+          GITHUB_EVENT_NAME: "pull_request",
+          OPENCLAW_CI_DOCS_ONLY: "false",
+          OPENCLAW_CI_DOCS_CHANGED: "false",
+          OPENCLAW_CI_RUN_NODE: "true",
+          OPENCLAW_CI_RUN_MACOS: "true",
+          OPENCLAW_CI_RUN_ANDROID: "false",
+          OPENCLAW_CI_RUN_WINDOWS: "true",
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: "false",
+          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false",
+          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}',
+        },
+        stdio: ["ignore", outputFd, "inherit"],
+      });
+    } finally {
+      fs.closeSync(outputFd);
+    }
 
+    const output = fs.readFileSync(outputPath, "utf8");
+    fs.rmSync(outputPath, { force: true });
     const manifest = JSON.parse(output);
     expect(manifest.jobs.checks.enabled).toBe(true);
     expect(manifest.jobs.macosNode.enabled).toBe(true);
