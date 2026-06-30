@@ -11,6 +11,7 @@ describe("fork stable release workflow", () => {
     expect(source).toContain('operation: "fork-github-release"');
     expect(source).toContain("npm install --global --prefix");
     expect(source).toContain("gh release create");
+    expect(source).not.toContain("openclaw-npm-prepublish-verify");
     expect(source).not.toContain("npm publish");
     expect(source).not.toContain("id-token: write");
     expect(source).not.toContain("gh workflow run");

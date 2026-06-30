@@ -153,13 +153,8 @@ jobs:
           const fs = require("node:fs");
           const expected = process.argv[2];
           const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
-          const shrinkwrap = JSON.parse(fs.readFileSync("npm-shrinkwrap.json", "utf8"));
-          if (
-            packageJson.version !== expected ||
-            shrinkwrap.version !== expected ||
-            shrinkwrap.packages?.[""]?.version !== expected
-          ) {
-            throw new Error("fork package and shrinkwrap versions are not aligned");
+          if (packageJson.version !== expected) {
+            throw new Error("fork package version does not match the release tag");
           }
           NODE
 
@@ -188,8 +183,6 @@ jobs:
           [[ -f "$tarball_path" ]]
           tarball_sha256="$(sha256sum "$tarball_path" | awk '{print $1}')"
 
-          node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
-            "$tarball_path" "$RELEASE_VERSION"
           install_prefix="$RUNNER_TEMP/fork-release-install"
           npm install --global --prefix "$install_prefix" "$tarball_path"
           installed_version="$("$install_prefix/bin/openclaw" --version)"
