@@ -18,7 +18,8 @@ import {
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const sourceCliPath = path.join(repositoryRoot, "scripts/verify-release-operation.mjs");
-const canonicalUrl = "https://github.com/openclaw/openclaw.git";
+const repository = "kevinlin-openai/openclaw";
+const canonicalUrl = "https://github.com/kevinlin-openai/openclaw.git";
 const tempRoots: string[] = [];
 
 type Operation =
@@ -27,7 +28,8 @@ type Operation =
   | "internal-validation"
   | "publish"
   | "postpublish"
-  | "stable-closeout";
+  | "stable-closeout"
+  | "fork-github-release";
 
 type Fixture = {
   root: string;
@@ -155,6 +157,8 @@ function baseInput(fixture: Fixture, operation: Operation = "tag-preflight") {
         ? ".github/workflows/openclaw-release-publish.yml"
         : operation === "stable-closeout"
           ? ".github/workflows/openclaw-stable-main-closeout.yml"
+          : operation === "fork-github-release"
+            ? ".github/workflows/fork-stable-release.yml"
           : ".github/workflows/openclaw-npm-release.yml";
   const executionRef = operation === "stable-closeout" ? "refs/heads/main" : authorizedSourceRef;
   return {
@@ -220,9 +224,9 @@ function runVerify(fixture: Fixture, input: unknown, environment: Record<string,
         PATH: `${path.join(fixture.root, "bin")}:${process.env.PATH}`,
         TEST_CANONICAL_REPO: fixture.canonicalRepo,
         TEST_GIT_LOG: fixture.gitLog,
-        GITHUB_REPOSITORY: "openclaw/openclaw",
+        GITHUB_REPOSITORY: repository,
         GITHUB_EVENT_NAME: execution.event,
-        GITHUB_WORKFLOW_REF: `openclaw/openclaw/${execution.workflowPath}@${execution.executionRef}`,
+        GITHUB_WORKFLOW_REF: `${repository}/${execution.workflowPath}@${execution.executionRef}`,
         GITHUB_REF: execution.executionRef,
         GITHUB_SHA: execution.runHeadSha,
         GITHUB_RUN_ID: execution.runId,
@@ -249,7 +253,7 @@ describe("verify-release-operation CLI", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe(
-      '{"schemaVersion":1,"supportedContractVersions":[1],"repository":"openclaw/openclaw","canonicalFetchUrl":"https://github.com/openclaw/openclaw.git"}\n',
+      '{"schemaVersion":1,"supportedContractVersions":[1],"repository":"kevinlin-openai/openclaw","canonicalFetchUrl":"https://github.com/kevinlin-openai/openclaw.git"}\n',
     );
   });
 
@@ -296,12 +300,16 @@ describe("verify-release-operation CLI", () => {
     "publish",
     "postpublish",
     "stable-closeout",
+    "fork-github-release",
   ] as const)("accepts the exact %s matrix entry", (operation) => {
     const fixture = createFixture();
     const input = baseInput(fixture, operation);
-    if (operation === "stable-closeout") {
+    if (operation === "stable-closeout" || operation === "fork-github-release") {
       input.releaseVersion = "2026.6.33";
       input.releaseSelector = "stable";
+      if (operation === "fork-github-release") {
+        input.execution.executionRef = "refs/heads/stable/2026.6.33";
+      }
       input.target = {
         targetRef: "refs/tags/v2026.6.33",
         targetSha: fixture.policySha,
@@ -429,9 +437,13 @@ describe("verify-release-operation CLI", () => {
     expect(unknown.stdout).toBe("");
     expect(JSON.parse(unknown.stderr).error.code).toBe("invalid-input");
 
-    const repository = runVerify(fixture, input, { GITHUB_REPOSITORY: "fork/openclaw" });
-    expect(repository.status).toBe(3);
-    expect(JSON.parse(repository.stderr).error.code).toBe("repository-identity-mismatch");
+    const repositoryMismatch = runVerify(fixture, input, {
+      GITHUB_REPOSITORY: "fork/openclaw",
+    });
+    expect(repositoryMismatch.status).toBe(3);
+    expect(JSON.parse(repositoryMismatch.stderr).error.code).toBe(
+      "repository-identity-mismatch",
+    );
 
     const execution = runVerify(fixture, input, { GITHUB_REF: "refs/heads/release/2026.7.5" });
     expect(execution.status).toBe(4);

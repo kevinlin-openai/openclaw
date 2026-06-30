@@ -1,0 +1,295 @@
+name: Fork Stable GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact stable tag to package and release
+        required: true
+        default: v2026.6.33
+        type: string
+      confirm_repository:
+        description: Type kevinlin-openai/openclaw to authorize this fork-only release
+        required: true
+        type: string
+      publish_release:
+        description: Publish the GitHub Release after build and install verification
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-stable-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+  FORK_REPOSITORY: kevinlin-openai/openclaw
+  FORK_FETCH_URL: https://github.com/kevinlin-openai/openclaw.git
+
+jobs:
+  build:
+    name: Build and verify fork release
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.bundle.outputs.artifact_name }}
+      release_version: ${{ steps.verify.outputs.release_version }}
+    steps:
+      - name: Validate fork-only dispatch
+        env:
+          CONFIRM_REPOSITORY: ${{ inputs.confirm_repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REPOSITORY" != "$FORK_REPOSITORY" || "$CONFIRM_REPOSITORY" != "$FORK_REPOSITORY" ]]; then
+            echo "Fork release requires exact repository confirmation: $FORK_REPOSITORY" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "Fork stable tag must use vYYYY.M.PATCH without zero padding." >&2
+            exit 1
+          fi
+          if [[ ! "$GITHUB_REF" =~ ^refs/heads/stable/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "Fork stable release must run from stable/YYYY.M.PATCH." >&2
+            exit 1
+          fi
+
+      - name: Checkout stable tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authenticate fork release policy and source
+        id: verify
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          if [[ "$package_version" != "$release_version" ]]; then
+            echo "Tag version $release_version does not match package version $package_version." >&2
+            exit 1
+          fi
+
+          policy_root="$RUNNER_TEMP/fork-release-policy-main"
+          rm -rf "$policy_root"
+          git init --quiet "$policy_root"
+          git -C "$policy_root" remote add origin "$FORK_FETCH_URL"
+          git -C "$policy_root" fetch --quiet --no-tags --no-recurse-submodules origin \
+            +refs/heads/main:refs/remotes/origin/main
+          git -C "$policy_root" checkout --quiet --detach refs/remotes/origin/main
+          policy_sha="$(git -C "$policy_root" rev-parse HEAD^{commit})"
+          target_sha="$(git rev-parse HEAD^{commit})"
+
+          verifier_input="$RUNNER_TEMP/fork-release-operation.json"
+          RELEASE_VERSION="$release_version" POLICY_SHA="$policy_sha" TARGET_SHA="$target_sha" \
+            node <<'NODE' > "$verifier_input"
+          const input = {
+            schemaVersion: 1,
+            operation: "fork-github-release",
+            releaseVersion: process.env.RELEASE_VERSION,
+            releaseSelector: "stable",
+            policyMode: "strict",
+            expectedPolicySourceSha: process.env.POLICY_SHA,
+            execution: {
+              event: process.env.GITHUB_EVENT_NAME,
+              workflowPath: ".github/workflows/fork-stable-release.yml",
+              executionRef: process.env.GITHUB_REF,
+              runHeadSha: process.env.GITHUB_SHA,
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            },
+            target: {
+              targetRef: `refs/tags/v${process.env.RELEASE_VERSION}`,
+              targetSha: process.env.TARGET_SHA,
+              releaseTag: `v${process.env.RELEASE_VERSION}`,
+              authorizedSourceRef: process.env.GITHUB_REF,
+            },
+          };
+          process.stdout.write(`${JSON.stringify(input)}\n`);
+          NODE
+
+          evidence_dir="$RUNNER_TEMP/fork-release-evidence"
+          rm -rf "$evidence_dir"
+          mkdir -p "$evidence_dir"
+          verifier_result="$evidence_dir/release-operation-verifier-v1.json"
+          node "$policy_root/scripts/verify-release-operation.mjs" verify \
+            --contract-version 1 \
+            --policy-root "$policy_root" \
+            --input "$verifier_input" > "$verifier_result"
+          jq -e '
+            .ok == true and
+            .operation == "fork-github-release" and
+            (.releaseClass == "stable-base" or .releaseClass == "stable-patch") and
+            .releaseSelector == "stable" and
+            .policyMode == "strict"
+          ' "$verifier_result" >/dev/null
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "target_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "verifier_result=$verifier_result" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Verify fork package metadata
+        env:
+          RELEASE_VERSION: ${{ steps.verify.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          node - "$RELEASE_VERSION" <<'NODE'
+          const fs = require("node:fs");
+          const expected = process.argv[2];
+          const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const shrinkwrap = JSON.parse(fs.readFileSync("npm-shrinkwrap.json", "utf8"));
+          if (
+            packageJson.version !== expected ||
+            shrinkwrap.version !== expected ||
+            shrinkwrap.packages?.[""]?.version !== expected
+          ) {
+            throw new Error("fork package and shrinkwrap versions are not aligned");
+          }
+          NODE
+
+      - name: Check test types
+        run: pnpm check:test-types
+
+      - name: Build release package
+        run: |
+          set -euo pipefail
+          pnpm build
+          pnpm ui:build
+
+      - name: Pack and install fork release
+        id: bundle
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ steps.verify.outputs.release_version }}
+          TARGET_SHA: ${{ steps.verify.outputs.target_sha }}
+          VERIFIER_RESULT: ${{ steps.verify.outputs.verifier_result }}
+        run: |
+          set -euo pipefail
+          pack_json="$RUNNER_TEMP/npm-pack.json"
+          OPENCLAW_PREPACK_PREPARED=1 npm pack --json > "$pack_json"
+          tarball_name="$(jq -er '.[0].filename' "$pack_json")"
+          tarball_path="$PWD/$tarball_name"
+          [[ -f "$tarball_path" ]]
+          tarball_sha256="$(sha256sum "$tarball_path" | awk '{print $1}')"
+
+          node --import tsx scripts/openclaw-npm-prepublish-verify.ts \
+            "$tarball_path" "$RELEASE_VERSION"
+          install_prefix="$RUNNER_TEMP/fork-release-install"
+          npm install --global --prefix "$install_prefix" "$tarball_path"
+          installed_version="$("$install_prefix/bin/openclaw" --version)"
+          if [[ "$installed_version" != "$RELEASE_VERSION" ]]; then
+            echo "Installed fork release reports $installed_version, expected $RELEASE_VERSION." >&2
+            exit 1
+          fi
+
+          artifact_name="fork-stable-release-${RELEASE_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bundle_dir="$RUNNER_TEMP/$artifact_name"
+          mkdir -p "$bundle_dir"
+          cp "$tarball_path" "$bundle_dir/"
+          cp "$VERIFIER_RESULT" "$bundle_dir/"
+          printf '%s  %s\n' "$tarball_sha256" "$tarball_name" > "$bundle_dir/$tarball_name.sha256"
+          verifier_name="$(basename "$VERIFIER_RESULT")"
+          verifier_sha256="$(sha256sum "$VERIFIER_RESULT" | awk '{print $1}')"
+          printf '%s  %s\n' "$verifier_sha256" "$verifier_name" > "$bundle_dir/$verifier_name.sha256"
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            --arg sha "$TARGET_SHA" \
+            --arg tarballName "$tarball_name" \
+            --arg tarballSha256 "$tarball_sha256" \
+            --arg verifierName "$verifier_name" \
+            --arg verifierSha256 "$verifier_sha256" \
+            '{
+              schemaVersion: 1,
+              repository: $repository,
+              tag: $tag,
+              version: $version,
+              targetSha: $sha,
+              tarball: {name: $tarballName, sha256: $tarballSha256},
+              verifier: {name: $verifierName, sha256: $verifierSha256},
+              npmPublished: false,
+              fullReleaseValidationRun: null
+            }' > "$bundle_dir/fork-release-manifest.json"
+          cat > "$bundle_dir/RELEASE_NOTES.md" <<EOF
+          Fork-only OpenClaw stable release test for \`${RELEASE_TAG}\`.
+
+          Verified:
+          - strict stable version and selector policy
+          - authenticated fork main policy and stable branch/tag authority
+          - generated release metadata
+          - production build and npm tarball contents
+          - clean global install from the release tarball
+
+          Intentionally skipped:
+          - npm registry publication or dist-tag mutation
+          - Full Release Validation
+          - plugin, ClawHub, macOS, and Windows publication
+          EOF
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "bundle_dir=$bundle_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified fork release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.bundle.outputs.artifact_name }}
+          path: ${{ steps.bundle.outputs.bundle_dir }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish fork GitHub Release
+    needs: [build]
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: fork-release
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified fork release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: release-bundle
+
+      - name: Verify and publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ needs.build.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          cd release-bundle
+          sha256sum --strict --check ./*.sha256
+          manifest_version="$(jq -er '.version' fork-release-manifest.json)"
+          if [[ "$manifest_version" != "$RELEASE_VERSION" ]]; then
+            echo "Release manifest version mismatch." >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "OpenClaw Fork ${RELEASE_VERSION}" \
+            --notes-file RELEASE_NOTES.md \
+            ./*.tgz ./*.sha256 fork-release-manifest.json release-operation-verifier-v1.json
