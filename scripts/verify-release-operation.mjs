@@ -8,8 +8,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const CONTRACT_VERSION = 1;
-const REPOSITORY = "openclaw/openclaw";
-const CANONICAL_FETCH_URL = "https://github.com/openclaw/openclaw.git";
+// This fork deliberately roots release authority in its own protected main.
+// Keeping these values compiled into the verifier prevents dispatch inputs from redirecting trust.
+const REPOSITORY = "kevinlin-openai/openclaw";
+const CANONICAL_FETCH_URL = "https://github.com/kevinlin-openai/openclaw.git";
 const POLICY_MAIN_REF = "refs/heads/main";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DECIMAL_PATTERN = /^[1-9][0-9]*$/u;
@@ -21,6 +23,7 @@ const OPERATIONS = new Set([
   "publish",
   "postpublish",
   "stable-closeout",
+  "fork-github-release",
 ]);
 const INPUT_KEYS = [
   "schemaVersion",
@@ -253,6 +256,7 @@ function validateOperationShape(operation, execution) {
     publish: ".github/workflows/openclaw-release-publish.yml",
     postpublish: ".github/workflows/openclaw-release-publish.yml",
     "stable-closeout": ".github/workflows/openclaw-stable-main-closeout.yml",
+    "fork-github-release": ".github/workflows/fork-stable-release.yml",
   }[operation];
   const eventAllowed =
     operation === "stable-closeout"
@@ -588,7 +592,7 @@ function expectedSourceRef(input, parsedVersion, releaseClass, metadata) {
 
 function enforceRefMatrix(input, authorizedSourceRef) {
   const { operation, releaseVersion, execution, target } = input;
-  if (["tag-preflight", "publish", "postpublish"].includes(operation)) {
+  if (["tag-preflight", "publish", "postpublish", "fork-github-release"].includes(operation)) {
     if (
       target.targetRef !== `refs/tags/v${releaseVersion}` ||
       target.releaseTag !== `v${releaseVersion}` ||
